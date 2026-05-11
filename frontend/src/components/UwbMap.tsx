@@ -1,0 +1,329 @@
+import React, { useEffect, useRef, useState } from 'react'
+import { Stage, Layer, Image as KonvaImage, Circle as KonvaCircle, Rect as KonvaRect, Text as KonvaText, Group } from 'react-konva'
+
+import { startUwbMock, stopUwbMock, subscribeToUwbMock } from '../services/uwbMock'
+import type { Tag } from '../services/uwbMock'
+
+type Anchor = {
+  id: string
+  x: number
+  y: number
+  label?: string
+  color?: string
+  theta_deg?: number
+}
+
+const UwbMap: React.FC = () => {
+  const [tags, setTags] = useState<Tag[]>([])
+  const [simTags, setSimTags] = useState<Tag[]>([])
+  const [imgSize, setImgSize] = useState<{ width: number; height: number } | null>(null)
+  const [imgEl, setImgEl] = useState<HTMLImageElement | null>(null)
+
+  const [anchors, setAnchors] = useState<Anchor[]>([])
+  const [referenceAnchorId, setReferenceAnchorId] = useState<string | null>(null)
+  const [showSettings, setShowSettings] = useState<boolean>(false)
+
+  const [pixelsPerMeter, setPixelsPerMeter] = useState<number>(1)
+  const [rotationDeg, setRotationDeg] = useState<number>(0)
+  const [invertBackendY, setInvertBackendY] = useState<boolean>(true)
+  const [mapWidthMStr, setMapWidthMStr] = useState<string>('')
+  const [mapHeightMStr, setMapHeightMStr] = useState<string>('')
+
+  
+
+  // inputs for simulate relative tag
+  const [simAnchorId, setSimAnchorId] = useState<string>('A1')
+  const [simDx, setSimDx] = useState('0')
+  const [simDy, setSimDy] = useState('0')
+  const [simLabel, setSimLabel] = useState('sim-1')
+
+  const containerRef = useRef<HTMLDivElement | null>(null)
+  const stageRef = useRef<any>(null)
+  const [stageSize, setStageSize] = useState({ width: 800, height: 600 })
+  const [stageTransform, setStageTransform] = useState({ scale: 1, x: 0, y: 0 })
+  const clamp = (v: number, min: number, max: number) => Math.max(min, Math.min(max, v))
+  const MAP_PADDING = 24 // pixels of empty space around the image inside the stage
+
+  useEffect(() => {
+    const img = new Image()
+    img.onload = () => {
+      setImgSize({ width: img.naturalWidth, height: img.naturalHeight })
+      setImgEl(img)
+    }
+    img.src = '/lab_map.png'
+  }, [])
+
+  useEffect(() => {
+    const update = () => {
+      const el = containerRef.current
+      if (!el) return
+      setStageSize({ width: el.clientWidth, height: el.clientHeight })
+    }
+    update()
+    window.addEventListener('resize', update)
+    return () => window.removeEventListener('resize', update)
+  }, [])
+
+  useEffect(() => {
+    if (!imgSize) return
+    const availW = Math.max(1, stageSize.width - MAP_PADDING * 2)
+    const availH = Math.max(1, stageSize.height - MAP_PADDING * 2)
+    const scale = Math.min(availW / imgSize.width, availH / imgSize.height)
+    const x = (stageSize.width - imgSize.width * scale) / 2
+    const y = (stageSize.height - imgSize.height * scale) / 2
+    setStageTransform({ scale, x, y })
+  }, [imgSize, stageSize])
+
+  // initialize anchors after image size known
+  useEffect(() => {
+    if (!imgSize) return
+    const stored = localStorage.getItem('uwb.anchors')
+    let anchorsToUse: Anchor[] = []
+    if (stored) {
+      try {
+        const parsed = JSON.parse(stored) as Anchor[]
+        anchorsToUse = parsed.map((p) => ({ ...p, x: clamp(p.x, 0, imgSize.width), y: clamp(p.y, 0, imgSize.height) }))
+      } catch (e) {
+        console.error('failed to parse anchors', e)
+        anchorsToUse = [
+          { id: 'A1', x: 50, y: 50, color: '#FF5722' },
+          { id: 'A2', x: imgSize.width - 50, y: 50, color: '#3F51B5' },
+          { id: 'A3', x: imgSize.width - 50, y: imgSize.height - 50, color: '#4CAF50' },
+          { id: 'A4', x: 50, y: imgSize.height - 50, color: '#FFC107' },
+        ]
+      }
+    } else {
+      anchorsToUse = [
+        { id: 'A1', x: 50, y: 50, color: '#FF5722' },
+        { id: 'A2', x: imgSize.width - 50, y: 50, color: '#3F51B5' },
+        { id: 'A3', x: imgSize.width - 50, y: imgSize.height - 50, color: '#4CAF50' },
+        { id: 'A4', x: 50, y: imgSize.height - 50, color: '#FFC107' },
+      ]
+    }
+    setAnchors(anchorsToUse)
+    const ppm = localStorage.getItem('uwb.pixelsPerMeter')
+    if (ppm) setPixelsPerMeter(Number(ppm))
+    const ref = localStorage.getItem('uwb.referenceAnchorId')
+    if (ref) {
+      setReferenceAnchorId(ref || null)
+    } else {
+      // default to A1 if available, otherwise first anchor
+      const defaultRef = anchorsToUse.find((p) => p.id === 'A1') ? 'A1' : anchorsToUse.length ? anchorsToUse[0].id : null
+      setReferenceAnchorId(defaultRef)
+    }
+    const mapW = localStorage.getItem('uwb.mapWidthM')
+    const mapH = localStorage.getItem('uwb.mapHeightM')
+    if (mapW) setMapWidthMStr(mapW)
+    if (mapH) setMapHeightMStr(mapH)
+    // if both map physical sizes available, compute pixelsPerMeter automatically
+    if (mapW && mapH) {
+      const wm = Number(mapW)
+      const hm = Number(mapH)
+      if (!isNaN(wm) && wm > 0 && !isNaN(hm) && hm > 0) {
+        const ppmx = imgSize.width / wm
+        const ppmy = imgSize.height / hm
+        const s = (ppmx + ppmy) / 2
+        setPixelsPerMeter(s)
+      }
+    }
+  }, [imgSize])
+
+  useEffect(() => {
+    if (mapWidthMStr) localStorage.setItem('uwb.mapWidthM', mapWidthMStr)
+  }, [mapWidthMStr])
+  useEffect(() => {
+    if (mapHeightMStr) localStorage.setItem('uwb.mapHeightM', mapHeightMStr)
+  }, [mapHeightMStr])
+
+  useEffect(() => {
+    if (anchors.length) localStorage.setItem('uwb.anchors', JSON.stringify(anchors))
+  }, [anchors])
+  useEffect(() => localStorage.setItem('uwb.pixelsPerMeter', String(pixelsPerMeter)), [pixelsPerMeter])
+  useEffect(() => localStorage.setItem('uwb.referenceAnchorId', String(referenceAnchorId || '')), [referenceAnchorId])
+
+  useEffect(() => {
+    if (!imgSize) return
+    const unsub = subscribeToUwbMock((next) => setTags(next))
+    startUwbMock({ width: imgSize.width, height: imgSize.height })
+    return () => {
+      unsub()
+      stopUwbMock()
+    }
+  }, [imgSize])
+
+  if (!imgSize) return <div className="map-root">Loading map…</div>
+
+  // convert backend-relative dx/dy (meters) to pixel coordinates using an anchor
+  function relativeToPixel(anchorId: string, dx: number, dy: number) {
+    const a = anchors.find((z) => z.id === anchorId)
+    if (!a) return null
+    const s = pixelsPerMeter || 1
+    const theta = ((a.theta_deg ?? rotationDeg) * Math.PI) / 180
+    const cos = Math.cos(theta)
+    const sin = Math.sin(theta)
+    const dyEff = invertBackendY ? -dy : dy
+    const px = a.x + s * (dx * cos - dyEff * sin)
+    const py = a.y + s * (dx * sin + dyEff * cos)
+    return { x: px, y: py }
+  }
+
+  // (placement via "Place" button removed; anchors are draggable directly)
+
+  const displayTags = [...tags, ...simTags]
+
+  function addSimulatedRelativeTag() {
+    const dx = Number(simDx)
+    const dy = Number(simDy)
+    const pos = relativeToPixel(simAnchorId, dx, dy)
+    if (!pos) return alert('Anchor not found')
+    const t: Tag = { id: simLabel, lat: pos.y, lng: pos.x, color: '#000' }
+    setSimTags((s) => [...s, t])
+  }
+
+  return (
+    <div className="map-root" ref={containerRef} style={{ width: '100%', height: '100%' }}>
+      <Stage
+        width={stageSize.width}
+        height={stageSize.height}
+        ref={stageRef}
+        x={stageTransform.x}
+        y={stageTransform.y}
+        scaleX={stageTransform.scale}
+        scaleY={stageTransform.scale}
+      >
+        <Layer>
+          {imgEl && <KonvaImage image={imgEl} x={0} y={0} width={imgSize!.width} height={imgSize!.height} />}
+
+          {anchors.map((a) => (
+            <Group
+              key={a.id}
+              x={a.x}
+              y={a.y}
+              draggable
+              dragBoundFunc={(pos) => {
+                if (!imgSize) return pos
+                const x = Math.max(0, Math.min(imgSize.width, pos.x))
+                const y = Math.max(0, Math.min(imgSize.height, pos.y))
+                return { x, y }
+              }}
+              onDragEnd={(e: any) => {
+                const node = e.target
+                const newX = node.x()
+                const newY = node.y()
+                const clampedX = imgSize ? clamp(newX, 0, imgSize.width) : newX
+                const clampedY = imgSize ? clamp(newY, 0, imgSize.height) : newY
+                setAnchors((prev) => {
+                  const next = prev.map((p) => (p.id === a.id ? { ...p, x: clampedX, y: clampedY } : p))
+                  try {
+                    localStorage.setItem('uwb.anchors', JSON.stringify(next))
+                  } catch (err) {}
+                  console.log('anchor moved', a.id, clampedX, clampedY)
+                  return next
+                })
+              }}
+            >
+              <KonvaRect x={-18} y={-18} width={36} height={36} fill={a.color || '#000'} cornerRadius={4} />
+              <KonvaText x={22} y={-10} text={a.id} fontSize={14} fill="#111" />
+            </Group>
+          ))}
+
+          {displayTags.map((t) => (
+            <Group key={t.id} x={t.lng} y={t.lat}>
+              <KonvaCircle x={0} y={0} radius={16} fill={t.color || '#007bff'} />
+              <KonvaText x={18} y={-10} text={t.id} fontSize={13} fill="#111" />
+            </Group>
+          ))}
+        </Layer>
+      </Stage>
+
+      <div className="map-controls">
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <h3 style={{ margin: 0 }}>Anchors</h3>
+          <button onClick={() => setShowSettings((s) => !s)}>{showSettings ? '設定を閉じる' : '設定'}</button>
+        </div>
+        <div>
+          {anchors.map((a) => (
+            <div key={a.id} style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 6 }}>
+              <div style={{ width: 12, height: 12, background: a.color, borderRadius: 3 }} />
+              <div style={{ flex: 1 }}>
+                <strong>{a.id}</strong> {a.label ? `(${a.label})` : ''}
+                <div style={{ fontSize: 12 }}>{Math.round(a.x)},{Math.round(a.y)}</div>
+              </div>
+              <button
+                onClick={() => setReferenceAnchorId(a.id)}
+                style={
+                  referenceAnchorId === a.id
+                    ? { backgroundColor: '#28a745', color: '#fff', border: 'none', padding: '6px 8px', borderRadius: 4 }
+                    : undefined
+                }
+              >
+                {referenceAnchorId === a.id ? 'Reference' : 'Set Ref'}
+              </button>
+            </div>
+          ))}
+        </div>
+        {showSettings && (
+          <>
+            <hr />
+            <h4>Scale / Rotation</h4>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <input type="number" value={pixelsPerMeter} onChange={(e) => setPixelsPerMeter(Number(e.target.value))} style={{ width: 120 }} />
+              <div>px/m</div>
+            </div>
+            
+            <div style={{ marginTop: 6 }}>
+              <label>Rotation(deg): <input type="number" value={rotationDeg} onChange={(e) => setRotationDeg(Number(e.target.value))} style={{ width: 80 }} /></label>
+            </div>
+            <div style={{ marginTop: 6 }}>
+              <label><input type="checkbox" checked={invertBackendY} onChange={(e) => setInvertBackendY(e.target.checked)} /> Backend Y is Up (invert)</label>
+            </div>
+
+            <div style={{ marginTop: 10 }}>
+              <h5>Map physical size (meters)</h5>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 6 }}>
+                <div style={{ width: 80 }}>
+                  <input placeholder="width (m)" value={mapWidthMStr} onChange={(e) => setMapWidthMStr(e.target.value)} style={{ width: '100%' }} />
+                </div>
+                <div style={{ width: 80 }}>
+                  <input placeholder="height (m)" value={mapHeightMStr} onChange={(e) => setMapHeightMStr(e.target.value)} style={{ width: '100%' }} />
+                </div>
+                <button onClick={() => {
+                  if (!imgSize) return alert('map not ready')
+                  const w = Number(mapWidthMStr)
+                  const h = Number(mapHeightMStr)
+                  if (!w || !h || isNaN(w) || isNaN(h) || w <= 0 || h <= 0) return alert('Enter valid positive numbers for width and height')
+                  const ppmx = imgSize.width / w
+                  const ppmy = imgSize.height / h
+                  const s = (ppmx + ppmy) / 2
+                  setPixelsPerMeter(s)
+                  localStorage.setItem('uwb.pixelsPerMeter', String(s))
+                  alert(`pixels/m set to ${s.toFixed(3)}`)
+                }}>Compute</button>
+              </div>
+            </div>
+
+            <hr />
+            <h4>Simulate relative tag</h4>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 6 }}>
+              <select value={simAnchorId} onChange={(e) => setSimAnchorId(e.target.value)}>
+                {anchors.map((a) => <option key={a.id} value={a.id}>{a.id}</option>)}
+              </select>
+              <input value={simDx} onChange={(e) => setSimDx(e.target.value)} style={{ width: 60 }} /> m
+              <input value={simDy} onChange={(e) => setSimDy(e.target.value)} style={{ width: 60 }} /> m
+            </div>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <input value={simLabel} onChange={(e) => setSimLabel(e.target.value)} />
+              <button onClick={addSimulatedRelativeTag}>Add</button>
+            </div>
+          </>
+        )}
+
+        <div style={{ marginTop: 12 }}>
+          <button onClick={() => { localStorage.setItem('uwb.anchors', JSON.stringify(anchors)); alert('Anchors saved') }}>Save anchors</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+export default UwbMap
