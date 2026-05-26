@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react'
-import { Stage, Layer, Image as KonvaImage, Circle as KonvaCircle, Rect as KonvaRect, Text as KonvaText, Group } from 'react-konva'
+import { Stage, Layer, Image as KonvaImage, Circle as KonvaCircle, Rect as KonvaRect, Text as KonvaText, Group, Line as KonvaLine } from 'react-konva'
 
 import { startUwbMock, stopUwbMock, subscribeToUwbMock } from '../services/uwbMock'
 import type { Tag } from '../services/uwbMock'
@@ -32,6 +32,9 @@ const UwbMap: React.FC = () => {
   const [referenceXStr, setReferenceXStr] = useState<string>('0')
   const [referenceYStr, setReferenceYStr] = useState<string>('0')
   const [referencePickMode, setReferencePickMode] = useState<boolean>(false)
+
+  const [showTrajectories, setShowTrajectories] = useState<boolean>(true)
+  const [trajectories, setTrajectories] = useState<Record<string, { x: number; y: number }[]>>({})
 
   
 
@@ -160,8 +163,6 @@ const UwbMap: React.FC = () => {
     }
   }, [imgSize])
 
-  if (!imgSize) return <div className="map-root">Loading map…</div>
-
   // convert backend-relative dx/dy (meters) to pixel coordinates using an anchor
   function relativeToPixel(anchorId: string, dx: number, dy: number) {
     const a = anchors.find((z) => z.id === anchorId)
@@ -180,6 +181,27 @@ const UwbMap: React.FC = () => {
 
   const tagsWithReference = tags.map((t) => ({ ...t, lng: t.lng + referencePoint.x, lat: t.lat + referencePoint.y }))
   const displayTags = [...tagsWithReference, ...simTags]
+  const tagColors = new Map(tagsWithReference.map((t) => [t.id, t.color || '#1976d2']))
+
+  useEffect(() => {
+    if (!tagsWithReference.length) return
+    const MAX_POINTS = 500
+    setTrajectories((prev) => {
+      const next: Record<string, { x: number; y: number }[]> = { ...prev }
+      for (const t of tagsWithReference) {
+        const current = next[t.id] ? [...next[t.id]] : []
+        const last = current[current.length - 1]
+        if (!last || last.x !== t.lng || last.y !== t.lat) {
+          current.push({ x: t.lng, y: t.lat })
+        }
+        if (current.length > MAX_POINTS) current.splice(0, current.length - MAX_POINTS)
+        next[t.id] = current
+      }
+      return next
+    })
+  }, [tags, referencePoint.x, referencePoint.y])
+
+  if (!imgSize) return <div className="map-root">Loading map…</div>
 
   function addSimulatedRelativeTag() {
     const dx = Number(simDx)
@@ -234,6 +256,13 @@ const UwbMap: React.FC = () => {
               <KonvaText x={12} y={-7} text="REF" fontSize={12} fill="#E91E63" />
             </Group>
           )}
+
+          {showTrajectories &&
+            Object.entries(trajectories).map(([id, points]) => {
+              if (points.length < 2) return null
+              const flat = points.flatMap((p) => [p.x, p.y])
+              return <KonvaLine key={id} points={flat} stroke={tagColors.get(id) || '#1976d2'} strokeWidth={4} lineCap="round" />
+            })}
 
           {anchors.map((a) => (
             <Group
@@ -347,6 +376,13 @@ const UwbMap: React.FC = () => {
               >
                 {referencePickMode ? 'Click on map…' : 'Pick on map'}
               </button>
+            </div>
+
+            <hr />
+            <h4>Trajectory</h4>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 6 }}>
+              <label><input type="checkbox" checked={showTrajectories} onChange={(e) => setShowTrajectories(e.target.checked)} /> Show trajectory</label>
+              <button onClick={() => setTrajectories({})}>Clear trajectory</button>
             </div>
 
             <hr />
