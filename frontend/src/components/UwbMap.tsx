@@ -261,7 +261,7 @@ const UwbMap: React.FC = () => {
             Object.entries(trajectories).map(([id, points]) => {
               if (points.length < 2) return null
               const flat = points.flatMap((p) => [p.x, p.y])
-              return <KonvaLine key={id} points={flat} stroke={tagColors.get(id) || '#1976d2'} strokeWidth={2} lineCap="round" />
+              return <KonvaLine key={id} points={flat} stroke={tagColors.get(id) || '#1976d2'} strokeWidth={4} lineCap="round" />
             })}
 
           {anchors.map((a) => (
