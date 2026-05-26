@@ -28,6 +28,11 @@ const UwbMap: React.FC = () => {
   const [mapWidthMStr, setMapWidthMStr] = useState<string>('')
   const [mapHeightMStr, setMapHeightMStr] = useState<string>('')
 
+  const [referencePoint, setReferencePoint] = useState<{ x: number; y: number }>({ x: 0, y: 0 })
+  const [referenceXStr, setReferenceXStr] = useState<string>('0')
+  const [referenceYStr, setReferenceYStr] = useState<string>('0')
+  const [referencePickMode, setReferencePickMode] = useState<boolean>(false)
+
   
 
   // inputs for simulate relative tag
@@ -102,6 +107,19 @@ const UwbMap: React.FC = () => {
     setAnchors(anchorsToUse)
     const ppm = localStorage.getItem('uwb.pixelsPerMeter')
     if (ppm) setPixelsPerMeter(Number(ppm))
+    const storedRef = localStorage.getItem('uwb.referencePoint')
+    if (storedRef) {
+      try {
+        const parsed = JSON.parse(storedRef) as { x: number; y: number }
+        if (Number.isFinite(parsed.x) && Number.isFinite(parsed.y)) {
+          setReferencePoint({ x: parsed.x, y: parsed.y })
+          setReferenceXStr(String(parsed.x))
+          setReferenceYStr(String(parsed.y))
+        }
+      } catch (e) {
+        console.error('failed to parse reference point', e)
+      }
+    }
     const mapW = localStorage.getItem('uwb.mapWidthM')
     const mapH = localStorage.getItem('uwb.mapHeightM')
     if (mapW) setMapWidthMStr(mapW)
@@ -130,6 +148,7 @@ const UwbMap: React.FC = () => {
     if (anchors.length) localStorage.setItem('uwb.anchors', JSON.stringify(anchors))
   }, [anchors])
   useEffect(() => localStorage.setItem('uwb.pixelsPerMeter', String(pixelsPerMeter)), [pixelsPerMeter])
+  useEffect(() => localStorage.setItem('uwb.referencePoint', JSON.stringify(referencePoint)), [referencePoint])
 
   useEffect(() => {
     if (!imgSize) return
@@ -159,7 +178,8 @@ const UwbMap: React.FC = () => {
 
   // (placement via "Place" button removed; anchors are draggable directly)
 
-  const displayTags = [...tags, ...simTags]
+  const tagsWithReference = tags.map((t) => ({ ...t, lng: t.lng + referencePoint.x, lat: t.lat + referencePoint.y }))
+  const displayTags = [...tagsWithReference, ...simTags]
 
   function addSimulatedRelativeTag() {
     const dx = Number(simDx)
@@ -168,6 +188,29 @@ const UwbMap: React.FC = () => {
     if (!pos) return alert('Anchor not found')
     const t: Tag = { id: simLabel, lat: pos.y, lng: pos.x, color: '#000' }
     setSimTags((s) => [...s, t])
+  }
+
+  function applyReferencePointFromInputs() {
+    const x = Number(referenceXStr)
+    const y = Number(referenceYStr)
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return alert('Enter valid numbers for reference X/Y')
+    setReferencePoint({ x, y })
+  }
+
+  function handleStageMouseDown(e: any) {
+    if (!referencePickMode || !imgSize) return
+    if (e?.evt && e.evt.button !== 0) return
+    const stage = stageRef.current
+    if (!stage) return
+    const pos = stage.getPointerPosition()
+    if (!pos) return
+    const scale = stageTransform.scale || 1
+    const x = clamp((pos.x - stageTransform.x) / scale, 0, imgSize.width)
+    const y = clamp((pos.y - stageTransform.y) / scale, 0, imgSize.height)
+    setReferencePoint({ x, y })
+    setReferenceXStr(String(Math.round(x)))
+    setReferenceYStr(String(Math.round(y)))
+    setReferencePickMode(false)
   }
 
   return (
@@ -180,9 +223,15 @@ const UwbMap: React.FC = () => {
         y={stageTransform.y}
         scaleX={stageTransform.scale}
         scaleY={stageTransform.scale}
+        onMouseDown={handleStageMouseDown}
       >
         <Layer>
           {imgEl && <KonvaImage image={imgEl} x={0} y={0} width={imgSize!.width} height={imgSize!.height} />}
+
+          <Group x={referencePoint.x} y={referencePoint.y}>
+            <KonvaCircle radius={8} stroke="#E91E63" strokeWidth={2} />
+            <KonvaText x={12} y={-7} text="REF" fontSize={12} fill="#E91E63" />
+          </Group>
 
           {anchors.map((a) => (
             <Group
@@ -280,6 +329,22 @@ const UwbMap: React.FC = () => {
                   alert(`pixels/m set to ${s.toFixed(3)}`)
                 }}>Compute</button>
               </div>
+            </div>
+
+            <hr />
+            <h4>Reference origin (pixels)</h4>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 6 }}>
+              <input value={referenceXStr} onChange={(e) => setReferenceXStr(e.target.value)} style={{ width: 80 }} />
+              <input value={referenceYStr} onChange={(e) => setReferenceYStr(e.target.value)} style={{ width: 80 }} />
+              <button onClick={applyReferencePointFromInputs}>Apply</button>
+            </div>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <button
+                onClick={() => setReferencePickMode((v) => !v)}
+                style={referencePickMode ? { backgroundColor: '#E91E63', color: '#fff', border: 'none', padding: '6px 8px', borderRadius: 4 } : undefined}
+              >
+                {referencePickMode ? 'Click on map…' : 'Pick on map'}
+              </button>
             </div>
 
             <hr />
