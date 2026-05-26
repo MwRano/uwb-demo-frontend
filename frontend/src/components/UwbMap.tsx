@@ -20,7 +20,6 @@ const UwbMap: React.FC = () => {
   const [imgEl, setImgEl] = useState<HTMLImageElement | null>(null)
 
   const [anchors, setAnchors] = useState<Anchor[]>([])
-  const [referenceAnchorId, setReferenceAnchorId] = useState<string | null>(null)
   const [showSettings, setShowSettings] = useState<boolean>(false)
 
   const [pixelsPerMeter, setPixelsPerMeter] = useState<number>(1)
@@ -103,14 +102,6 @@ const UwbMap: React.FC = () => {
     setAnchors(anchorsToUse)
     const ppm = localStorage.getItem('uwb.pixelsPerMeter')
     if (ppm) setPixelsPerMeter(Number(ppm))
-    const ref = localStorage.getItem('uwb.referenceAnchorId')
-    if (ref) {
-      setReferenceAnchorId(ref || null)
-    } else {
-      // default to A1 if available, otherwise first anchor
-      const defaultRef = anchorsToUse.find((p) => p.id === 'A1') ? 'A1' : anchorsToUse.length ? anchorsToUse[0].id : null
-      setReferenceAnchorId(defaultRef)
-    }
     const mapW = localStorage.getItem('uwb.mapWidthM')
     const mapH = localStorage.getItem('uwb.mapHeightM')
     if (mapW) setMapWidthMStr(mapW)
@@ -139,7 +130,6 @@ const UwbMap: React.FC = () => {
     if (anchors.length) localStorage.setItem('uwb.anchors', JSON.stringify(anchors))
   }, [anchors])
   useEffect(() => localStorage.setItem('uwb.pixelsPerMeter', String(pixelsPerMeter)), [pixelsPerMeter])
-  useEffect(() => localStorage.setItem('uwb.referenceAnchorId', String(referenceAnchorId || '')), [referenceAnchorId])
 
   useEffect(() => {
     if (!imgSize) return
@@ -249,16 +239,6 @@ const UwbMap: React.FC = () => {
                 <strong>{a.id}</strong> {a.label ? `(${a.label})` : ''}
                 <div style={{ fontSize: 12 }}>{Math.round(a.x)},{Math.round(a.y)}</div>
               </div>
-              <button
-                onClick={() => setReferenceAnchorId(a.id)}
-                style={
-                  referenceAnchorId === a.id
-                    ? { backgroundColor: '#28a745', color: '#fff', border: 'none', padding: '6px 8px', borderRadius: 4 }
-                    : undefined
-                }
-              >
-                {referenceAnchorId === a.id ? 'Reference' : 'Set Ref'}
-              </button>
             </div>
           ))}
         </div>
