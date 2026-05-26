@@ -228,10 +228,12 @@ const UwbMap: React.FC = () => {
         <Layer>
           {imgEl && <KonvaImage image={imgEl} x={0} y={0} width={imgSize!.width} height={imgSize!.height} />}
 
-          <Group x={referencePoint.x} y={referencePoint.y}>
-            <KonvaCircle radius={8} stroke="#E91E63" strokeWidth={2} />
-            <KonvaText x={12} y={-7} text="REF" fontSize={12} fill="#E91E63" />
-          </Group>
+          {showSettings && (
+            <Group x={referencePoint.x} y={referencePoint.y}>
+              <KonvaCircle radius={8} stroke="#E91E63" strokeWidth={2} />
+              <KonvaText x={12} y={-7} text="REF" fontSize={12} fill="#E91E63" />
+            </Group>
+          )}
 
           {anchors.map((a) => (
             <Group
