@@ -4,6 +4,9 @@ import { Stage, Layer, Image as KonvaImage, Circle as KonvaCircle, Rect as Konva
 import { startUwbMock, stopUwbMock, subscribeToUwbMock } from '../services/uwbMock'
 import type { Tag } from '../services/uwbMock'
 
+import { fetchLatestLocation } from '../services/api'
+import type { BackendCoord } from '../services/api'
+
 type Anchor = {
   id: string
   x: number
@@ -28,7 +31,7 @@ const UwbMap: React.FC = () => {
   const [mapWidthMStr, setMapWidthMStr] = useState<string>('')
   const [mapHeightMStr, setMapHeightMStr] = useState<string>('')
 
-  const [referencePoint, setReferencePoint] = useState<{ x: number; y: number }>({ x: 0, y: 0 })
+  const [referencePoint, setReferencePoint] = useState<{ x: number; y: number }>({ x: 609, y: 678 })
   const [referenceXStr, setReferenceXStr] = useState<string>('0')
   const [referenceYStr, setReferenceYStr] = useState<string>('0')
   const [referencePickMode, setReferencePickMode] = useState<boolean>(false)
@@ -50,6 +53,9 @@ const UwbMap: React.FC = () => {
   const [stageTransform, setStageTransform] = useState({ scale: 1, x: 0, y: 0 })
   const clamp = (v: number, min: number, max: number) => Math.max(min, Math.min(max, v))
   const MAP_PADDING = 24 // pixels of empty space around the image inside the stage
+
+  // ▼▼▼ 追加するState: バックエンドから取得した生の実座標 ▼▼▼
+  const [realBackendPos, setRealBackendPos] = useState<BackendCoord | null>(null)
 
   useEffect(() => {
     const img = new Image()
@@ -153,15 +159,29 @@ const UwbMap: React.FC = () => {
   useEffect(() => localStorage.setItem('uwb.pixelsPerMeter', String(pixelsPerMeter)), [pixelsPerMeter])
   useEffect(() => localStorage.setItem('uwb.referencePoint', JSON.stringify(referencePoint)), [referencePoint])
 
+  // useEffect(() => {
+  //   if (!imgSize) return
+  //   const unsub = subscribeToUwbMock((next) => setTags(next))
+  //   startUwbMock({ width: imgSize.width, height: imgSize.height })
+  //   return () => {
+  //     unsub()
+  //     stopUwbMock()
+  //   }
+  // }, [imgSize])
+
+  // ▼▼▼ 修正後（リアルAPIのポーリング）▼▼▼
   useEffect(() => {
-    if (!imgSize) return
-    const unsub = subscribeToUwbMock((next) => setTags(next))
-    startUwbMock({ width: imgSize.width, height: imgSize.height })
-    return () => {
-      unsub()
-      stopUwbMock()
-    }
-  }, [imgSize])
+    if (!imgSize) return;
+
+    const intervalId = setInterval(async () => {
+      const pos = await fetchLatestLocation();
+      if (pos) {
+        setRealBackendPos(pos); // 最新の実座標(m)を保存
+      }
+    }, 500); // 0.5秒おきにフェッチ
+
+    return () => clearInterval(intervalId);
+  }, [imgSize]);
 
   // convert backend-relative dx/dy (meters) to pixel coordinates using an anchor
   function relativeToPixel(anchorId: string, dx: number, dy: number) {
@@ -211,6 +231,27 @@ const UwbMap: React.FC = () => {
     const t: Tag = { id: simLabel, lat: pos.y, lng: pos.x, color: '#000' }
     setSimTags((s) => [...s, t])
   }
+  
+  // ▼▼▼ 修正: 新しい referencePoint (基準点) を使ってピクセル座標を計算 ▼▼▼
+  let realTagPixelPos = null;
+  if (realBackendPos) {
+    const s = pixelsPerMeter || 1;
+    const theta = (rotationDeg * Math.PI) / 180;
+    const cos = Math.cos(theta);
+    const sin = Math.sin(theta);
+    
+  // ★ココを修正！ バックエンドの X と Y を意図的に入れ替える
+    const dx = realBackendPos.y; // ← バックエンドの y を画面の X軸方向（dx）に使う
+    const dy = realBackendPos.x; // ← バックエンドの x を画面の Y軸方向（dy）に使う
+    // Y軸の反転設定を適用
+    const dyEff = invertBackendY ? -dy : dy;
+
+    realTagPixelPos = {
+      x: referencePoint.x + s * (dx * cos - dyEff * sin),
+      y: referencePoint.y + s * (dx * sin + dyEff * cos)
+    };
+  }
+  // ▲▲▲
 
   function applyReferencePointFromInputs() {
     const x = Number(referenceXStr)
@@ -303,6 +344,15 @@ const UwbMap: React.FC = () => {
               <KonvaText x={18} y={-10} text={t.id} fontSize={13} fill="#111" />
             </Group>
           ))}
+
+          {/* ▼▼▼ 追加: リアルタイム測位タグの描画 ▼▼▼ */}
+          {realTagPixelPos && (
+            <Group x={realTagPixelPos.x} y={realTagPixelPos.y}>
+              {/* 少し目立つように赤色で少し大きめの円にする */}
+              <KonvaCircle x={0} y={0} radius={18} fill="#e50000" shadowBlur={8} shadowColor="rgba(0,0,0,0.5)" />
+              <KonvaText x={22} y={-10} text="My Tag (Live)" fontSize={15} fill="#111" fontStyle="bold" />
+            </Group>
+          )}
         </Layer>
       </Stage>
 
